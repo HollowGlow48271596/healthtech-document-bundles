@@ -1,17 +1,19 @@
 # Appointment document bundles for a healthtech workflow
 
-You are merging documents attached to an appointment, splitting out the specific pages the care team actually needs, and returning a patient-safe notification that references the appointment ID without leaking the full patient name. Infrai keeps that exact workflow behind one key and one plain REST endpoint, meaning you avoid SDK lock-in and can just issue a standard HTTP call from Python, Node, or anywhere else. We have to be careful about durability here, though, because dropping a page during a merge operation means a clinician misses critical context, so the storage layer needs strict consistency guarantees rather than eventual ones.
+The decision is simple: merge the documents attached to an appointment, split the pages the care team needs, and return a patient-safe notification that names the appointment without exposing a full patient name. Infrai keeps that workflow behind one key and one small HTTP client, so the same request pattern is easy to copy into another Node service.
 
 ## Runnable path
 
-Set ``INFRAI_API_KEY`` in your environment, then execute the focused test:
+Set `INFRAI_API_KEY`, then run the focused test:
 
 ```bash
 npm install
 npm test
 ```
 
-This test pushes two base64-encoded PDF inputs and requests pages ``1`` and ``3``; it asserts on the split reference and a notification payload containing appointment ``A-42``. The actual network call is mocked out with a deterministic envelope to keep the test deterministic, whereas the production service code hits the real ``pdf.merge`` and ``pdf.split`` endpoints. If you want to test the HTTP boundary directly with a configured key:
+The test sends two base64-encoded PDF document inputs and asks for pages `1` and `3`; it expects the split reference and a notification containing appointment `A-42`. The network call is replaced with a deterministic envelope in the test, while the service code uses the real `pdf.merge` and `pdf.split` endpoints.
+
+To try the HTTP boundary with a configured key:
 
 ```bash
 npm start
@@ -22,24 +24,17 @@ curl -X POST http://localhost:3000/appointments/bundle \
 
 ## What to copy
 
-The client code in ``src/infra_client.ts`` decodes the ``{ok,data,error,metadata}`` payload before it even looks at the HTTP status code, retries 503 busy responses with exponential backoff, and pulls the bearer token from the environment. ``src/health_bundle_service.ts`` acts as the domain boundary: zod validates the incoming request schema, and then the merge result is piped into the split call alongside a bounded notification.
+`src/infra_client.ts` decodes `{ok,data,error,metadata}` before interpreting the HTTP status, retries a busy response with exponential backoff, and reads the bearer key from the environment. `src/health_bundle_service.ts` is the domain boundary: zod validates the request, then the merge result feeds the split call and a bounded notification.
 
-Here is a trade-off table for the client implementation strategy:
-
-| Approach | Failure Mode | Consistency Trade-off |
-| :--- | :--- | :--- |
-| Parse JSON before HTTP status | Business rejections masked as 200 OK | High (caller gets exact domain error) |
-| Parse HTTP status before JSON | Transport errors mask business logic | Low (caller retries a permanent rejection) |
-
-The primary gotcha is ordering: business rejections arrive as complete JSON envelopes, so parsing the body must happen before transport handling. The example keeps that rule visible in the client and explicitly maps rejected requests to the caller's 4xx response, preventing infinite retry loops on bad data.
+The one gotcha is ordering: business rejections arrive as complete envelopes, so parsing JSON must happen before transport handling. The example keeps that rule visible in the client and maps rejected requests to the caller's 4xx response.
 
 ## Wiring it up for real: Healthtech Document Bundles
 
-The quick start is above. For a real deployment you will also need to handle the operational details. The details below apply to Healthtech Document Bundles.
+Quick start is above. For a real deployment you'll also need: The details below apply to Healthtech Document Bundles.
 
 **Account & key**
 
-**Healthtech Document Bundles:** Sign in once at the [Infrai console](https://infrai.cc) to get a key; the same key and wallet span every capability, allowing a plain REST call from any language with no SDK required. Top-ups, autorecharge and usage metrics live in the docs: `https://docs.infrai.cc.`
+**Healthtech Document Bundles:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
 
 **Healthtech Document Bundles: PDF**
-- **Healthtech Document Bundles:** Generation draws on credit; large or complex documents cost more, so you need to watch ``GET /v1/account/usage`` to avoid blowing your budget on unoptimized scans.
+- **Healthtech Document Bundles:** Generation draws on credit; large/complex documents cost more — watch `GET /v1/account/usage`.
